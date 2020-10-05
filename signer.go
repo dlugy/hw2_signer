@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"sync"
 )
-
 
 // сюда писать код
 
-func SingleHash(in, out chan interface{}) {
-	d1 := <- in
-	data := fmt.Sprintf("%v", d1 )
+func DoSingleHash(out chan interface{}, data string, wg *sync.WaitGroup) {
+	defer wg.Done()
 
 	crc1 := DataSignerCrc32(data)
 	crc2 := DataSignerCrc32(DataSignerMd5("0"))
@@ -20,41 +19,69 @@ func SingleHash(in, out chan interface{}) {
 	out <- crc32
 }
 
-func MultiHash(in, out chan interface{}) {
-	d1 := <-in
-	data := fmt.Sprintf("%v", d1 )
+func SingleHash(in, out chan interface{}) {
+	wg := &sync.WaitGroup{}
+	for val := range in {
+		data, _ := val.(string)
+		wg.Add(1)
+		go DoSingleHash(out, data, wg)
+	}
+	wg.Wait()
+	close(out)
+}
 
+func MultiHash(in, out chan interface{}) {
 	crcM := ""
 	crcL := ""
 	dataTmp := ""
-	for i := 0; i <= 5; i++ {
-		dataTmp = strconv.Itoa(i) + data
-		crcL = DataSignerCrc32(dataTmp)
-		crcM += crcL
+
+	innerChan := make(chan interface{})
+
+	for val := range in {
+		for i := 0; i <= 5; i++ {
+			data, _ := val.(string)
+			dataTmp = strconv.Itoa(i) + data
+			crcL = DataSignerCrc32(dataTmp)
+			crcM += crcL
+		}
+		out <- crcM
 	}
-	out <- crcM
 }
 
 func CombineResults(in, out chan interface{}) {
 
 }
 
-
-
 func main() {
 	var result []string
+	inputData := []int{0,1}
 
-	ch1 := make(chan interface{})
-	ch2 := make(chan interface{})
+	hashSignJobs := []job{
+		job(func(in, out chan interface{}) {
+			for _, fibNum := range inputData {
+				out <- fibNum
+			}
+		}),
+		job(SingleHash),
+		job(MultiHash),
+		job(CombineResults),
+		job(func(in, out chan interface{}) {
+			dataRaw := <-in
+			data, ok := dataRaw.(string)
+			fmt.Println(data, ok)
+		}),
+	}
 
-	go SingleHash(ch1, ch2)
-	go MultiHash(ch2, ch2)
-	go CombineResults(ch1, ch2)
+	var chanIn []chan interface{}
+	var chanOut []chan interface{}
 
-	ch1 <- "0"
+	for i := 0; i < len(hashSignJobs); i++ {
+		chanIn[i] = make(chan interface{})
+		chanOut[i] = make(chan interface{})
+		go hashSignJobs[i](chanIn[i], chanOut[i])
+	}
 
 	result = append(result, "end")
 	sort.Strings(result)
-
 	fmt.Scanln()
 }
