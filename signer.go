@@ -17,8 +17,6 @@ type crc32Channel struct {
 func innerSingleHash(out chan interface{}, num int, data string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	fmt.Println(num)
-
 	var innerCrc32 crc32Channel
 	crc := DataSignerCrc32(data)
 	innerCrc32.num = num
@@ -37,7 +35,7 @@ func doSingleHash(out chan interface{}, data string, quotaChan chan interface{},
 	go innerSingleHash(innerChan, 0, data, innerWg)
 
 	quotaChan <- struct{}{}
-	innerMd5 := DataSignerMd5("0")
+	innerMd5 := DataSignerMd5(data)
 	<- quotaChan
 	innerWg.Add(1)
 	go innerSingleHash(innerChan, 1, innerMd5, innerWg)
@@ -51,10 +49,9 @@ func doSingleHash(out chan interface{}, data string, quotaChan chan interface{},
 	for val := range innerChan {
 		innerData[j] = val.(crc32Channel)
 		j++
-//		innerData = append(innerData, val.(crc32Channel))
 	}
 	sort.Slice(innerData, func(i, j int) bool { return innerData[i].num < innerData[j].num })
-	crc32 = innerData[0].data + "`" + innerData[1].data
+	crc32 = innerData[0].data + "~" + innerData[1].data
 	out <- crc32
 }
 
@@ -62,12 +59,11 @@ func SingleHash(in, out chan interface{}) {
 	wg := &sync.WaitGroup{}
 	quotaMd5Chan := make(chan interface{}, 1)
 	for val := range in {
-		data, _ := val.(string)
+		data := fmt.Sprintf("%v", val)
 		wg.Add(1)
 		go doSingleHash(out, data, quotaMd5Chan, wg)
 	}
 	wg.Wait()
-	close(out)
 }
 
 func innerMultiHash(out chan interface{}, data string, wg *sync.WaitGroup) {
@@ -91,8 +87,8 @@ func innerMultiHash(out chan interface{}, data string, wg *sync.WaitGroup) {
 	for val := range innerChan {
 		innerData[j] = val.(crc32Channel)
 		j++
-//		innerData = append(innerData, val.(crc32Channel))
 	}
+
 	sort.Slice(innerData, func(i, j int) bool { return innerData[i].num < innerData[j].num })
 	for _, val := range innerData {
 		crcM += val.data
@@ -104,7 +100,7 @@ func innerMultiHash(out chan interface{}, data string, wg *sync.WaitGroup) {
 func MultiHash(in, out chan interface{}) {
 	wg := &sync.WaitGroup{}
 	for val := range in {
-		data, _ := val.(string)
+		data := fmt.Sprintf("%v", val)
 		wg.Add(1)
 		go innerMultiHash(out, data, wg)
 	}
@@ -112,26 +108,31 @@ func MultiHash(in, out chan interface{}) {
 }
 
 func CombineResults(in, out chan interface{}) {
-/*	var innerData []string
-
+/*	data := ""
 	for val := range in {
-		data, _ := val.(string)
-		innerData = append(innerData, data)
+		data = data + "_" + fmt.Sprintf("%v", val)
+	}
+	fmt.Println(data)*/
+
+
+	data := ""
+	innerData := make([]string, 8)
+	j := 0
+	for val := range in {
+		innerData[j] = fmt.Sprintf("%v", val)
+		j++
 	}
 	sort.Slice(innerData, func(i, j int) bool { return innerData[i] < innerData[j] })
-
-	res := innerData[0]
-	for i := 1; i < len(innerData); i++ {
-		res = res + "_" + innerData[i]
+	j = 0
+	for _, s1 := range innerData {
+		data = data + "_" + s1
 	}
-
- */
-	res := "111"
-//	fmt.Println("2222")
-	out <- res
+	data = data[1:]
+	out <- data
 }
 
 func main() {
+
 	inputData := []int{0,1}
 
 	hashSignJobs := []job{
@@ -151,15 +152,31 @@ func main() {
 	}
 
 	chanPipeLine := make([]chan interface{}, len(hashSignJobs)+1)
-
+	chanPipeLine[0] = make(chan interface{}, 100)
 	for i := 0; i < len(hashSignJobs); i++ {
-		if i == 0 {
-			chanPipeLine[i] = make(chan interface{}, 100)
-		}
 		chanPipeLine[i+1] = make(chan interface{}, 100)
-		go hashSignJobs[i](chanPipeLine[i], chanPipeLine[i+1])
+		go func(i int) {
+			hashSignJobs[i](chanPipeLine[i], chanPipeLine[i+1])
+			close(chanPipeLine[i+1])
+		}(i)
 	}
 
-	fmt.Scanln()
+	for range chanPipeLine[len(hashSignJobs)] {
+	}
+}
 
+func ExecutePipeline(hashSignJobs []job) {
+
+	chanPipeLine := make([]chan interface{}, len(hashSignJobs)+1)
+	chanPipeLine[0] = make(chan interface{}, 100)
+	for i := 0; i < len(hashSignJobs); i++ {
+		chanPipeLine[i+1] = make(chan interface{}, 100)
+		go func(i int) {
+			hashSignJobs[i](chanPipeLine[i], chanPipeLine[i+1])
+			close(chanPipeLine[i+1])
+		}(i)
+	}
+
+	for range chanPipeLine[len(hashSignJobs)] {
+	}
 }
